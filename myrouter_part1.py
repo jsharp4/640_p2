@@ -15,7 +15,7 @@ class Router(object):
     def __init__(self, net):
         self.net = net
         # other initialization stuff here
-        arp_table = dict()
+        self.arp_table = dict()
         my_interfaces = net.interfaces()
         self.my_ips = [intf.ipaddr for intf in my_interfaces]
         self.mac_ip_dict = dict((intf.ipaddr, intf.ethaddr) for intf in my_interfaces)
@@ -32,12 +32,15 @@ class Router(object):
                 if pkt.has_header(Arp):
                     arp = pkt.get_header(Arp)
                     if arp.targetprotoaddr in self.my_ips:
-                        senderhwaddr = self.mac_ip_dict[arp.targetprotoaddr]
-                        senderprotoaddr = arp.targetprotoaddr
-                        targethwaddr = arp.senderhwaddr
-                        targetprotoaddr = arp.senderprotoaddr
-                        arp_reply = create_ip_arp_reply(senderhwaddr, targethwaddr, senderprotoaddr, targetprotoaddr)
-                        self.net.send_packet(dev, arp_reply)
+                        if arp.operation == ArpOperation.Request:
+                            senderhwaddr = self.mac_ip_dict[arp.targetprotoaddr]
+                            senderprotoaddr = arp.targetprotoaddr
+                            targethwaddr = arp.senderhwaddr
+                            targetprotoaddr = arp.senderprotoaddr
+                            arp_reply = create_ip_arp_reply(senderhwaddr, targethwaddr, senderprotoaddr, targetprotoaddr)
+                            self.net.send_packet(dev, arp_reply)
+                        elif arp.operation == ArpOperation.Reply:
+                            self.arp_table[arp.senderprotoaddr] = arp.senderhwaddr
             except NoPackets:
                 log_debug("No packets available in recv_packet")
                 gotpkt = False
