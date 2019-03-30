@@ -49,6 +49,7 @@ class Router(object):
             mask = line.split()[1]
             next_hop = line.split()[2]
             name = line.split()[3]
+            i = 0
             for entry in self.forwarding_table:
                 file_addr = IPv4Network(addr+'/'+mask)
                 entry_addr = IPv4Network('0.0.0.0' +'/'+ str(entry[1]))
