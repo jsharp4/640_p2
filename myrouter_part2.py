@@ -40,7 +40,7 @@ class Router(object):
                 if intf_addr.prefixlen >= entry_addr.prefixlen:
                     break
                 i += 1
-            self.forwarding_table.insert(i, [intf.ipaddr, intf.netmask, intf.ipaddr, intf.name])
+            self.forwarding_table.insert(i, [intf.ipaddr, intf.netmask, None, intf.name])
 		    
         table = open("./forwarding_table.txt", "r") 
         lines = table.readlines()
@@ -71,17 +71,7 @@ class Router(object):
             try:
                 timestamp,dev,pkt = self.net.recv_packet(timeout=1.0)
                 
-                for i in range(self.pkt_queue.qsize()):
-                    dequeue_pkt = self.pkt_queue.get()
-                    if time.time() - dequeue_pkt.timestamp >= 1:
-                        if dequeue_pkt.count >= 4:
-                            continue
-                        dequeue_pkt.count += 1
-                        dequeue_ip = self.name_ip_dict[dequeue_pkt.next_name]
-                        dequeue_mac = self.mac_ip_dict[dequeue_ip]
-                        arp_request = create_ip_arp_request(dequeue_mac, dequeue_ip, dequeue_pkt.next_hop)
-                        self.net.send_packet(dequeue_pkt.next_name, arp_request)
-                    self.pkt_queue.put(dequeue_pkt)
+                
                     
                 if pkt.has_header(Arp):
                     arp = pkt.get_header(Arp)
@@ -125,6 +115,8 @@ class Router(object):
                             break
                     if next_hop == '':
                         continue
+                    elif next_hop == None:
+                        next_hop = ipv4.dst 
                     if next_hop in self.arp_table:
                         ethaddr = self.arp_table[next_hop][1]
                         self.arp_table[next_hop] = [ethaddr, time.time()]
@@ -150,7 +142,17 @@ class Router(object):
             if gotpkt:
                 log_debug("Got a packet: {}".format(str(pkt)))
 
-
+            for i in range(self.pkt_queue.qsize()):
+                dequeue_pkt = self.pkt_queue.get()
+                if time.time() - dequeue_pkt.timestamp >= 1:
+                    if dequeue_pkt.count >= 4:
+                            continue
+                    dequeue_pkt.count += 1
+                    dequeue_ip = self.name_ip_dict[dequeue_pkt.next_name]
+                    dequeue_mac = self.mac_ip_dict[dequeue_ip]
+                    arp_request = create_ip_arp_request(dequeue_mac, dequeue_ip, dequeue_pkt.next_hop)
+                    self.net.send_packet(dequeue_pkt.next_name, arp_request)
+                self.pkt_queue.put(dequeue_pkt)
 
 def main(net):
     '''
