@@ -83,16 +83,20 @@ class Router(object):
                             targetprotoaddr = arp.senderprotoaddr
                             arp_reply = create_ip_arp_reply(senderhwaddr, targethwaddr, senderprotoaddr, targetprotoaddr)
                             self.net.send_packet(dev, arp_reply)
+                            #log_debug("@@@@@@@@@@ SENDING ARP REPLY")
                         elif arp.operation == ArpOperation.Reply:
                             self.arp_table[arp.senderprotoaddr] = [arp.senderhwaddr, time.time()]
                             for i in range(self.pkt_queue.qsize()):
                                 dequeue_pkt = self.pkt_queue.get()
-                                if  next_hop == arp.senderprotoaddr:
+                                if  dequeue_pkt.next_hop == arp.senderprotoaddr:
                                     next_ip = self.name_ip_dict[dequeue_pkt.next_name]
                                     next_mac = self.mac_ip_dict[next_ip]
-                                    ethernet_header = Ethernet(src=next_mac, dst=arp.senderhwaddr, ethertype=EtherType.IPv4)
-                                    pkt.add_header(ethernet_header)
-                                    self.net.send_packet(next_name, pkt)
+                                    #ethernet_header = Ethernet(src=next_mac, dst=arp.senderhwaddr, ethertype=EtherType.IPv4)
+                                    out_pkt = dequeue_pkt.packet
+                                    out_pkt[Ethernet].dst = arp.senderhwaddr
+                                    out_pkt[Ethernet].src = next_mac
+                                    #log_debug("BBBBBBBBBBBBBB SENDING DEQUEUED PACKET")
+                                    self.net.send_packet(next_name, out_pkt)
                                     continue
                                 self.pkt_queue.put(dequeue_pkt)
 
@@ -128,9 +132,9 @@ class Router(object):
                     else :
                         next_ip = self.name_ip_dict[next_name]
                         next_mac = self.mac_ip_dict[next_ip]					
-                        arp_request = create_ip_arp_request(next_mac, next_ip, next_hop)
-                        self.net.send_packet(next_name, arp_request)
-                        apr_entry = Apr_queue_entry(pkt, next_hop, next_name, 1, time.time())
+                        #arp_request = create_ip_arp_request(next_mac, next_ip, next_hop)
+                        #self.net.send_packet(next_name, arp_request)
+                        apr_entry = Apr_queue_entry(pkt, next_hop, next_name, 1, time.time() - 1)
                         self.pkt_queue.put(apr_entry)
             except NoPackets:
                 log_debug("No packets available in recv_packet")
@@ -152,6 +156,8 @@ class Router(object):
                     dequeue_mac = self.mac_ip_dict[dequeue_ip]
                     arp_request = create_ip_arp_request(dequeue_mac, dequeue_ip, dequeue_pkt.next_hop)
                     self.net.send_packet(dequeue_pkt.next_name, arp_request)
+                    #log_debug("CCCCCCCCCCCCCCCCCCCCCCCCCCCC SENDING ARP REQUEST FROM QUEUE")
+                dequeue_pkt.timestamp = time.time()
                 self.pkt_queue.put(dequeue_pkt)
 
 def main(net):
