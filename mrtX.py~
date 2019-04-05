@@ -7,6 +7,7 @@ Basic IPv4 router (static routing) in Python.
 import sys
 import os
 import time
+from dynamicroutingmessage import DynamicRoutingMessage
 
 from queue import *
 from switchyard.lib.packet.util import *
@@ -59,6 +60,11 @@ class Router(object):
                 i += 1
             self.forwarding_table.insert(i, [addr, mask, next_hop, name])
 
+        #for entry in self.forwarding_table:
+        #    log_debug("### " + str(entry[0]) + "---" + str(entry[1]) + "---" + str(entry[2]) + "---" + str(entry[3]) + "###")
+
+        self.dynamic_fwd_table = [None] * 5
+
 
     def router_main(self):    
         '''
@@ -80,22 +86,63 @@ class Router(object):
                             targetprotoaddr = arp.senderprotoaddr
                             arp_reply = create_ip_arp_reply(senderhwaddr, targethwaddr, senderprotoaddr, targetprotoaddr)
                             self.net.send_packet(dev, arp_reply)
-                           
+                            #log_debug("@@@@@@@@@@ SENDING ARP REPLY")
                         elif arp.operation == ArpOperation.Reply:
                             self.arp_table[arp.senderprotoaddr] = [arp.senderhwaddr, time.time()]
                             for i in range(self.pkt_queue.qsize()):
                                 int(arp.senderprotoaddr)
                                 dequeue_pkt = self.pkt_queue.get()
                                 if  int(dequeue_pkt.next_hop) == int(arp.senderprotoaddr):
+                                    log_debug("BBBBBBBBBBBBBB QUEUE " + str(dequeue_pkt.next_hop))
+                                    log_debug("WWWWWWWWWWWWWW QUEUE " + str(arp.senderprotoaddr))
                                     next_ip = self.name_ip_dict[dequeue_pkt.next_name]
                                     next_mac = self.mac_ip_dict[next_ip]
+                                    #ethernet_header = Ethernet(src=next_mac, dst=arp.senderhwaddr, ethertype=EtherType.IPv4)
                                     out_pkt = dequeue_pkt.packet
                                     out_pkt[Ethernet].dst = arp.senderhwaddr
                                     out_pkt[Ethernet].src = next_mac
                                     self.net.send_packet(dequeue_pkt.next_name, out_pkt)
                                     continue
                                 self.pkt_queue.put(dequeue_pkt)
-                
+                elif pkt.has_header(DynamicRoutingMessage):
+                    dynamic_header = pkt.get_header(DynamicRoutingMessage)
+                    oldest_time = time.time()
+                    oldest_index = 0
+
+                    for i in range(0, 5):
+                        entry = self.dynamic_fwd_table[i]
+                        if entry is None:
+                            self.dynamic_fwd_table[i] = [dynamic_header.advertised_prefix, dynamic_header.advertised_mask, dynamic_header.next_hop, dev, time.time()]
+                            break
+                        elif entry[0] == dynamic_header.advertised_prefix and entry[1] == dynamic_header.advertised_mask:
+                            self.dynamic_fwd_table[i][2] = dynamic_header.next_hop	
+                            self.dynamic_fwd_table[i][3] = dev							
+                            self.dynamic_fwd_table[i][4] = time.time()
+                            break
+                        elif (IPv4Network(str(entry[0])+'/'+ str(entry[1])).prefixlen < IPv4Network(str(dynamic_header.advertised_prefix)+'/'+ str(dynamic_header.advertised_mask)).prefixlen):
+                            self.dynamic_fwd_table.insert(i, [dynamic_header.advertised_prefix, dynamic_header.advertised_mask, dynamic_header.next_hop, dev, time.time()])
+                            if self.dynamic_fwd_table[5] is None:
+                                self.dynamic_fwd_table.pop(5)
+                            else:
+                                oldest_time = time.time()
+                                oldest_index = 0
+                                for i in range(0, 6):
+                                    if self.dynamic_fwd_table[i][4] < oldest_time:
+                                        oldest_index = i
+                                        oldest_time = self.dynamic_fwd_table[i][4]
+                                self.dynamic_fwd_table.pop(oldest_index)
+                                log_debug("XXXXXXXXXXXXXXXXXXXXXXXXXXXXX " + str(oldest_index))
+                            break
+                        elif i == 4:
+                            self.dynamic_fwd_table.insert(5, [dynamic_header.advertised_prefix, dynamic_header.advertised_mask, dynamic_header.next_hop, dev, time.time()])
+                            oldest_time = time.time()
+                            oldest_index = 0
+                            for i in range(0, 6):
+                                if self.dynamic_fwd_table[i][4] < oldest_time:
+                                    oldest_index = i
+                                    oldest_time = self.dynamic_fwd_table[i][4]
+                            self.dynamic_fwd_table.pop(oldest_index)
+                            log_debug("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ " + str(oldest_index))
                 elif pkt.has_header(IPv4):
                     ipv4 = pkt.get_header(IPv4)
                     ipv4.ttl -= 1
@@ -103,28 +150,43 @@ class Router(object):
                         continue
                     ip_addr = ipv4.dst
                     next_hop = ''
-                    for entry in self.forwarding_table:
-                        prefix = IPv4Address(entry[0])
-                        mask = IPv4Address(entry[1])
-                        destaddr = IPv4Address(ip_addr)
-                        matches = (int(mask) & int(destaddr)) == (int(prefix) & int(mask))
-                        if matches:
-                            next_hop = entry[2]
-                            next_name = entry[3]
+                    for dynamic_entry in self.dynamic_fwd_table:
+                        if dynamic_entry is None:
                             break
+                        prefix = dynamic_entry[0]
+                        mask = dynamic_entry[1]
+                        destaddr = IPv4Address(ip_addr)
+                        matches = (int(mask) & int(destaddr)) == (int(prefix))
+                        #log_debug("XXX" + str(int(mask) & int(destaddr)) + "===" + str(int(prefix)))
+                        if matches:
+                            next_hop = dynamic_entry[2]
+                            next_name = dynamic_entry[3]
+                            log_debug("FFFFFFFFFFFFFFFFFFFFFFF " + next_name + " " + str(next_hop))
+                            log_debug("GGGGGGGGGGGGGGGGGGGGGGG " + str(destaddr))
+                            break
+                    if next_hop == '':
+                        for entry in self.forwarding_table:
+                            prefix = IPv4Address(entry[0])
+                            mask = IPv4Address(entry[1])
+                            destaddr = IPv4Address(ip_addr)
+                            matches = (int(mask) & int(destaddr)) == (int(prefix) & int(mask))
+                            #log_debug("XXX" + str(int(mask) & int(destaddr)) + "===" + str(int(prefix)))
+                            if matches:
+                                next_hop = entry[2]
+                                next_name = entry[3]
+                                break
                     if next_hop == '':
                         continue
                     elif next_hop == None:
                         next_hop = ipv4.dst 
                     next_hop = IPv4Address(next_hop)                    
                     if next_hop in self.arp_table:
-                        ethaddr = self.arp_table[next_hop][0]
+                        ethaddr = self.arp_table[next_hop][1]
                         self.arp_table[next_hop] = [ethaddr, time.time()]
                         next_ip = self.name_ip_dict[next_name]
                         next_mac = self.mac_ip_dict[next_ip]
-                        #ethernet_header = Ethernet(src=next_mac, dst=ethaddr, ethertype=EtherType.IPv4)
-                        pkt[Ethernet].src = next_mac
-                        pkt[Ethernet].dst = ethaddr
+                        ethernet_header = Ethernet(src=next_mac, dst=ethaddr, ethertype=EtherType.IPv4)
+                        pkt.add_header(ethernet_header)
                         self.net.send_packet(next_name, pkt)
                     else :
                         next_ip = self.name_ip_dict[next_name]
@@ -153,9 +215,12 @@ class Router(object):
                     dequeue_mac = self.mac_ip_dict[dequeue_ip]
                     arp_request = create_ip_arp_request(dequeue_mac, dequeue_ip, dequeue_pkt.next_hop)
                     self.net.send_packet(dequeue_pkt.next_name, arp_request)
+                    #log_debug("CCCCCCCCCCCCCCCCCCCCCCCCCCCC SENDING ARP REQUEST FROM QUEUE")
                 dequeue_pkt.timestamp = time.time()
                 self.pkt_queue.put(dequeue_pkt)
                 
+            #for i in range(0, len(self.dynamic_fwd_table)):
+                #log_debug('############'+str(self.dynamic_fwd_table[i]))
 
 def main(net):
     '''
