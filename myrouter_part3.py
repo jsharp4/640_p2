@@ -105,16 +105,39 @@ class Router(object):
                                     continue
                                 self.pkt_queue.put(dequeue_pkt)
                 elif pkt.has_header(DynamicRoutingMessage):
+					dynamic_header = pkt.get_header(DynamicRoutingMessage)
                     oldest_time = time.time()
                     oldest_index = 0
 
                     for i in range(0, 4):
-                        entry = dynamic_fwd_table[i]
+                        entry = self.dynamic_fwd_table[i]
                         if entry is None:
-                            dynamic_fwd_table.remove(i)
+                            self.dynamic_fwd_table[i] = [dynamic_header.advertised_prefix, dynamic_header.advertised_mask, dynamic_header.next_hop, dev, time.time()]
                             break
-                        elif entry[0] == and entry[1] ==                                              
-
+                        elif entry[0] == dynamic_header.advertised_prefix and entry[1] == dynamic_header.advertised_mask:
+                            self.dynamic_fwd_table[i][2] = dynamic_header.next_hop	
+                            self.dynamic_fwd_table[i][3] = dev							
+                            self.dynamic_fwd_table[i][4] = time.time()
+							break
+						elif IPv4Network(str(entry[0])+'/'+ str(entry[1])).prefixlen() < IPv4Network(str(dynamic_header.advertised_prefix)+'/'+ str(dynamic_header.advertised_mask)).prefixlen():
+							self.dynamic_fwd_table.insert(i, [dynamic_header.advertised_prefix, dynamic_header.advertised_mask, dynamic_header.next_hop, dev, time.time()])
+							if self.dynamic_fwd_table[5] is None:
+								self.dynamic_fwd_table.remove(5)
+							else:
+								oldest_time = time.time()
+								oldest_index = 0
+								for i in range(0, 5):
+									if dynamic_fwd_table[i][4] < oldest_time:
+										oldest_index = i
+								dynamic_fwd_table.remove(oldest_index)
+						else:
+							self.dynamic_fwd_table.insert(5, [dynamic_header.advertised_prefix, dynamic_header.advertised_mask, dynamic_header.next_hop, dev, time.time()])
+							oldest_time = time.time()
+							oldest_index = 0
+							for i in range(0, 5):
+								if dynamic_fwd_table[i][4] < oldest_time:
+									oldest_index = i
+							self.dynamic_fwd_table.remove(oldest_index)
                 elif pkt.has_header(IPv4):
                     ipv4 = pkt.get_header(IPv4)
                     ipv4.ttl -= 1
@@ -122,9 +145,9 @@ class Router(object):
                         continue
                     ip_addr = ipv4.dst
                     next_hop = ''
-                    for entry in self.forwarding_table:
-                        prefix = IPv4Address(entry[0])
-                        mask = IPv4Address(entry[1])
+					for dynamic_entry in self.dynamic_fwd_table:
+                        prefix = IPv4Address(dynamic_entry[0])
+                        mask = IPv4Address(dynamic_entry[1])
                         destaddr = IPv4Address(ip_addr)
                         matches = (int(mask) & int(destaddr)) == (int(prefix) & int(mask))
                         log_debug("XXX" + str(int(mask) & int(destaddr)) + "===" + str(int(prefix)))
@@ -132,6 +155,17 @@ class Router(object):
                             next_hop = entry[2]
                             next_name = entry[3]
                             break
+                    if next_hop == '':
+						for entry in self.forwarding_table:
+							prefix = IPv4Address(entry[0])
+							mask = IPv4Address(entry[1])
+							destaddr = IPv4Address(ip_addr)
+							matches = (int(mask) & int(destaddr)) == (int(prefix) & int(mask))
+							log_debug("XXX" + str(int(mask) & int(destaddr)) + "===" + str(int(prefix)))
+							if matches:
+								next_hop = entry[2]
+								next_name = entry[3]
+								break
                     if next_hop == '':
                         continue
                     elif next_hop == None:
